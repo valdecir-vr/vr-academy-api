@@ -126,6 +126,7 @@ app.include_router(prescriptions_router, prefix="/api")
 # ---------------------------------------------------------------------------
 
 @app.get("/health")
+@app.get("/api/health")
 async def health():
     """Health check — verifica se o servidor esta operacional."""
     from db.database import get_db

@@ -78,7 +78,7 @@ async def list_users(
     return [dict(r) for r in rows]
 
 
-@router.get("/:id")
+@router.get("/{id}")
 async def get_user(id: int, current_user: dict = Depends(get_current_user)):
     """Retorna dados de um usuario. Admin/gestor ve qualquer um; colaborador ve apenas a si mesmo."""
     if current_user["role"] == "colaborador" and current_user["id"] != id:
