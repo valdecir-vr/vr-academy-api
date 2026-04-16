@@ -215,6 +215,49 @@ CREATE TABLE IF NOT EXISTS access_log (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Audit log — registra todas as acoes administrativas
+CREATE TABLE IF NOT EXISTS audit_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER REFERENCES users(id),
+    action      TEXT NOT NULL,  -- login|login_failed|create_user|update_user|change_role|reset_password|block_leads|create_prescription|delete_user
+    target_type TEXT,           -- user|track|module|lesson|enrollment|prescription
+    target_id   INTEGER,
+    details     TEXT DEFAULT '{}',  -- JSON com before/after ou contexto
+    ip_address  TEXT,
+    user_agent  TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Error log — registra erros de backend e frontend
+CREATE TABLE IF NOT EXISTS error_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    source      TEXT NOT NULL CHECK(source IN ('backend','frontend','scheduler','middleware')),
+    level       TEXT NOT NULL DEFAULT 'error' CHECK(level IN ('debug','info','warning','error','critical')),
+    endpoint    TEXT,
+    method      TEXT,
+    user_id     INTEGER REFERENCES users(id),
+    error_type  TEXT,
+    message     TEXT NOT NULL,
+    stack_trace TEXT,
+    request_body TEXT,
+    ip_address  TEXT,
+    user_agent  TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Request log — registra todas as requests para metricas
+CREATE TABLE IF NOT EXISTS request_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    method        TEXT NOT NULL,
+    path          TEXT NOT NULL,
+    status_code   INTEGER NOT NULL,
+    user_id       INTEGER,
+    duration_ms   REAL,
+    ip_address    TEXT,
+    user_agent    TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Indices para performance
 CREATE INDEX IF NOT EXISTS idx_enrollments_user ON enrollments(user_id);
 CREATE INDEX IF NOT EXISTS idx_enrollments_track ON enrollments(track_id);
@@ -227,3 +270,10 @@ CREATE INDEX IF NOT EXISTS idx_crivo_user ON crivo_scores(user_id);
 CREATE INDEX IF NOT EXISTS idx_prescriptions_user ON learning_prescriptions(user_id);
 CREATE INDEX IF NOT EXISTS idx_access_log_user ON access_log(user_id);
 CREATE INDEX IF NOT EXISTS idx_access_log_created ON access_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_error_log_source ON error_log(source);
+CREATE INDEX IF NOT EXISTS idx_error_log_created ON error_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_request_log_path ON request_log(path);
+CREATE INDEX IF NOT EXISTS idx_request_log_created ON request_log(created_at);

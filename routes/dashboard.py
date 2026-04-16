@@ -5,8 +5,10 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import traceback
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from db.database import get_db
 from auth_utils import get_current_user, require_admin, require_admin_or_gestor
@@ -492,3 +494,90 @@ async def dashboard_alerts(current_user: dict = Depends(get_current_user)):
         await db.commit()
 
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Frontend error logging endpoint
+# ---------------------------------------------------------------------------
+
+class FrontendErrorReport(BaseModel):
+    message: str
+    stack: str = ""
+    component: str = ""
+    url: str = ""
+    user_agent: str = ""
+
+
+@router.post("/log-error")
+async def log_frontend_error(body: FrontendErrorReport, current_user: dict = Depends(get_current_user)):
+    """Recebe erros do frontend e persiste no error_log."""
+    from logging_config import log_error, logger
+    logger.warning(f"[FRONTEND ERROR] user={current_user['id']} component={body.component}: {body.message}")
+    await log_error(
+        source="frontend",
+        message=body.message,
+        level="error",
+        endpoint=body.url,
+        user_id=current_user["id"],
+        error_type="FrontendError",
+        stack_trace=body.stack,
+        user_agent=body.user_agent,
+    )
+    return {"logged": True}
+
+
+# ---------------------------------------------------------------------------
+# Audit + Error log query endpoints (admin only)
+# ---------------------------------------------------------------------------
+
+@router.get("/audit-log")
+async def get_audit_log(
+    current_user: dict = Depends(require_admin),
+    limit: int = 50,
+):
+    """Retorna o audit log para o admin."""
+    db = await get_db()
+    cursor = await db.execute(
+        """SELECT al.*, u.name AS user_name
+           FROM audit_log al
+           LEFT JOIN users u ON u.id = al.user_id
+           ORDER BY al.created_at DESC LIMIT ?""",
+        (min(limit, 200),),
+    )
+    return [dict(r) for r in await cursor.fetchall()]
+
+
+@router.get("/error-log")
+async def get_error_log(
+    current_user: dict = Depends(require_admin),
+    source: str = "",
+    limit: int = 50,
+):
+    """Retorna o error log para o admin."""
+    db = await get_db()
+    if source:
+        cursor = await db.execute(
+            """SELECT * FROM error_log WHERE source=? ORDER BY created_at DESC LIMIT ?""",
+            (source, min(limit, 200)),
+        )
+    else:
+        cursor = await db.execute(
+            "SELECT * FROM error_log ORDER BY created_at DESC LIMIT ?",
+            (min(limit, 200),),
+        )
+    return [dict(r) for r in await cursor.fetchall()]
+
+
+@router.get("/request-log")
+async def get_request_log(
+    current_user: dict = Depends(require_admin),
+    limit: int = 100,
+):
+    """Retorna o request log para o admin."""
+    db = await get_db()
+    cursor = await db.execute(
+        """SELECT method, path, status_code, user_id, duration_ms, created_at
+           FROM request_log ORDER BY created_at DESC LIMIT ?""",
+        (min(limit, 500),),
+    )
+    return [dict(r) for r in await cursor.fetchall()]

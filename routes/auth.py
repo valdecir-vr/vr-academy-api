@@ -17,6 +17,7 @@ from auth_utils import (
     decode_token,
     get_current_user,
 )
+from logging_config import logger, log_audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -53,9 +54,21 @@ async def login(req: LoginRequest):
     user = await cursor.fetchone()
 
     if not user or not verify_password(req.password, user["password_hash"]):
+        # Log failed login attempt
+        logger.warning(f"Login falhou: {req.email.lower().strip()}")
+        await log_audit(
+            action="login_failed",
+            details=f'{{"email": "{req.email.lower().strip()}", "reason": "invalid_credentials"}}',
+        )
         raise HTTPException(status_code=401, detail="Email ou senha invalidos")
 
     if not user["is_active"]:
+        logger.warning(f"Login bloqueado (inativo): {req.email}")
+        await log_audit(
+            action="login_failed",
+            user_id=user["id"],
+            details='{"reason": "account_inactive"}',
+        )
         raise HTTPException(status_code=403, detail="Conta inativa. Contate o administrador.")
 
     # Log de acesso
@@ -64,6 +77,8 @@ async def login(req: LoginRequest):
         (user["id"],),
     )
     await db.commit()
+    logger.info(f"Login OK: {user['email']} (id={user['id']}, role={user['role']})")
+    await log_audit(action="login", user_id=user["id"], details=f'{{"role": "{user["role"]}"}}')
 
     access_token = create_access_token(user["id"], user["role"])
     refresh_token = create_refresh_token(user["id"], user["role"])

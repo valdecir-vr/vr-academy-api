@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from db.database import get_db
 from auth_utils import get_current_user, require_admin_or_gestor, require_admin, hash_password
+from logging_config import logger, log_audit
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -79,6 +80,14 @@ async def create_user(
         await db.execute("INSERT OR IGNORE INTO streaks (user_id) VALUES (?)", (new_id,))
 
     await db.commit()
+    logger.info(f"User created: {body.email} (id={new_id}, role={body.role}) by admin {current_user['id']}")
+    await log_audit(
+        action="create_user",
+        user_id=current_user["id"],
+        target_type="user",
+        target_id=new_id,
+        details=f'{{"email": "{body.email}", "role": "{body.role}", "name": "{body.name}"}}',
+    )
     return {"message": "Usuario criado com sucesso", "id": new_id, "email": body.email.lower().strip()}
 
 
@@ -294,4 +303,29 @@ async def update_user(
         f"UPDATE users SET {', '.join(fields)} WHERE id=?", params
     )
     await db.commit()
+
+    # Audit trail — log what changed
+    changes = {}
+    if body.role is not None:
+        changes["role"] = body.role
+    if body.is_active is not None:
+        changes["is_active"] = body.is_active
+    if body.new_password is not None:
+        changes["password_reset"] = True
+    if body.name is not None:
+        changes["name"] = body.name
+    if body.email is not None:
+        changes["email"] = body.email
+
+    action = "change_role" if "role" in changes else "reset_password" if "password_reset" in changes else "update_user"
+    import json as _json
+    logger.info(f"User {id} updated by admin {current_user['id']}: {changes}")
+    await log_audit(
+        action=action,
+        user_id=current_user["id"],
+        target_type="user",
+        target_id=id,
+        details=_json.dumps(changes, ensure_ascii=False),
+    )
+
     return {"message": "Usuario atualizado com sucesso", "id": id}
