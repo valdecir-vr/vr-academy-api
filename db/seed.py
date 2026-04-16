@@ -274,10 +274,10 @@ async def run_seed():
     """Executa o seed de dados iniciais. Idempotente — nao duplica dados."""
     db = await get_db()
 
-    # Verifica se ja foi executado
-    cursor = await db.execute("SELECT COUNT(*) FROM users")
-    count = (await cursor.fetchone())[0]
-    if count > 0:
+    # Verifica se ja foi executado (checa pela trilha, nao por users — migrations podem criar users antes)
+    cursor = await db.execute("SELECT COUNT(*) FROM tracks")
+    track_count = (await cursor.fetchone())[0]
+    if track_count > 0:
         print("[SEED] Dados ja existem. Pulando seed.")
         return
 
