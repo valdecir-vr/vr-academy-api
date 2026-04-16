@@ -1,6 +1,5 @@
 """Structured logging + audit/error persistence — VR Academy."""
 
-from typing import Optional
 import logging
 import sys
 import traceback
@@ -35,12 +34,12 @@ logger = setup_logging()
 
 async def log_audit(
     action: str,
-    user_id: Optional[int] = None,
-    target_type: Optional[str] = None,
-    target_id: Optional[int] = None,
+    user_id: int | None = None,
+    target_type: str | None = None,
+    target_id: int | None = None,
     details: str = "{}",
-    ip_address: Optional[str] = None,
-    user_agent: Optional[str] = None,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
 ):
     """Persist an audit event to the audit_log table."""
     try:
@@ -60,14 +59,14 @@ async def log_error(
     source: str,
     message: str,
     level: str = "error",
-    endpoint: Optional[str] = None,
-    method: Optional[str] = None,
-    user_id: Optional[int] = None,
-    error_type: Optional[str] = None,
-    stack_trace: Optional[str] = None,
-    request_body: Optional[str] = None,
-    ip_address: Optional[str] = None,
-    user_agent: Optional[str] = None,
+    endpoint: str | None = None,
+    method: str | None = None,
+    user_id: int | None = None,
+    error_type: str | None = None,
+    stack_trace: str | None = None,
+    request_body: str | None = None,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
 ):
     """Persist an error to the error_log table."""
     try:
@@ -90,9 +89,9 @@ async def log_request(
     path: str,
     status_code: int,
     duration_ms: float,
-    user_id: Optional[int] = None,
-    ip_address: Optional[str] = None,
-    user_agent: Optional[str] = None,
+    user_id: int | None = None,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
 ):
     """Persist a request to the request_log table."""
     try:

@@ -7,7 +7,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import DB_PATH, DATA_DIR
 
-_db = None  # type: aiosqlite.Connection | None
+_db: aiosqlite.Connection | None = None
 
 
 async def get_db() -> aiosqlite.Connection:

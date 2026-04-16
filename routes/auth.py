@@ -17,12 +17,7 @@ from auth_utils import (
     decode_token,
     get_current_user,
 )
-try:
-    from logging_config import logger, log_audit
-except ImportError:
-    import logging
-    logger = logging.getLogger("vr-academy")
-    async def log_audit(**kwargs): pass
+from logging_config import logger, log_audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
