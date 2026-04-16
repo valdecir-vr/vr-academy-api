@@ -288,7 +288,7 @@ async def run_seed():
     # Usuarios
     for u in USERS:
         await db.execute(
-            """INSERT INTO users (name, email, password_hash, role, phone, hire_date)
+            """INSERT OR IGNORE INTO users (name, email, password_hash, role, phone, hire_date)
                VALUES (?, ?, ?, ?, ?, ?)""",
             (u["name"], u["email"], pwd_hash, u["role"], u["phone"], u["hire_date"]),
         )
