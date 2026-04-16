@@ -139,7 +139,7 @@ async def get_modules_lock_status(user_id: int, track_id: int) -> dict:
             "done": c["done"],
         }
 
-    def _is_prereq_passed(prereq_id: int) -> tuple[bool, str | None]:
+    def _is_prereq_passed(prereq_id: int):
         """Check if a prerequisite module is passed."""
         quizzes = quizzes_by_mod.get(prereq_id, [])
         if quizzes:
