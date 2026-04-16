@@ -349,16 +349,16 @@ async def run_seed():
 
     for sdr in sdrs:
         await db.execute(
-            """INSERT INTO enrollments (user_id, track_id, status, due_date)
+            """INSERT OR IGNORE INTO enrollments (user_id, track_id, status, due_date)
                VALUES (?, ?, 'pendente', ?)""",
             (sdr[0], track_id, due_date),
         )
         # Criar user_points e streaks zerados
         await db.execute(
-            "INSERT INTO user_points (user_id) VALUES (?)", (sdr[0],)
+            "INSERT OR IGNORE INTO user_points (user_id) VALUES (?)", (sdr[0],)
         )
         await db.execute(
-            "INSERT INTO streaks (user_id) VALUES (?)", (sdr[0],)
+            "INSERT OR IGNORE INTO streaks (user_id) VALUES (?)", (sdr[0],)
         )
 
     await db.commit()
