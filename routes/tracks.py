@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from db.database import get_db
 from auth_utils import get_current_user, require_admin
+from services.gate_service import get_modules_lock_status
 
 router = APIRouter(prefix="/tracks", tags=["tracks"])
 
@@ -81,8 +82,16 @@ async def get_track(id: int, current_user: dict = Depends(get_current_user)):
     modules_rows = await cursor.fetchall()
     modules = []
 
+    # Compute lock status for all modules at once (optimized)
+    lock_map = await get_modules_lock_status(user_id, id)
+
     for mod in modules_rows:
         mod_dict = dict(mod)
+
+        # Lock status from gate service
+        mod_lock = lock_map.get(mod["id"], {"unlocked": True, "reason": None})
+        mod_dict["is_locked"] = not mod_lock["unlocked"]
+        mod_dict["lock_reason"] = mod_lock.get("reason")
 
         # Licoes do modulo
         cursor = await db.execute(
@@ -97,6 +106,11 @@ async def get_track(id: int, current_user: dict = Depends(get_current_user)):
             (user_id, mod["id"]),
         )
         lessons = [dict(r) for r in await cursor.fetchall()]
+
+        # If module is locked, override lesson statuses
+        if mod_dict["is_locked"]:
+            for lesson in lessons:
+                lesson["progress_status"] = "bloqueada"
 
         # Progresso do modulo
         done = sum(1 for l in lessons if l.get("progress_status") == "concluida")

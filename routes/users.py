@@ -15,6 +15,15 @@ from auth_utils import get_current_user, require_admin_or_gestor, require_admin,
 router = APIRouter(prefix="/users", tags=["users"])
 
 
+class UserCreate(BaseModel):
+    name: str
+    email: str
+    role: str = "colaborador"
+    phone: Optional[str] = ""
+    hire_date: Optional[str] = None
+    password: Optional[str] = None  # defaults to vr2026
+
+
 class UserUpdate(BaseModel):
     name: Optional[str] = None
     email: Optional[str] = None
@@ -25,6 +34,52 @@ class UserUpdate(BaseModel):
     is_active: Optional[bool] = None
     role: Optional[str] = None
     new_password: Optional[str] = None
+
+
+@router.post("")
+async def create_user(
+    body: UserCreate,
+    current_user: dict = Depends(require_admin),
+):
+    """Cria novo usuario. Somente admin. Auto-matricula em trilhas obrigatorias."""
+    db = await get_db()
+
+    if body.role not in ("admin", "gestor", "colaborador"):
+        raise HTTPException(status_code=400, detail="Role invalido")
+
+    # Check duplicate
+    cursor = await db.execute("SELECT id FROM users WHERE email=?", (body.email.lower().strip(),))
+    if await cursor.fetchone():
+        raise HTTPException(status_code=409, detail="Email ja cadastrado")
+
+    from config import DEFAULT_PASSWORD
+    pwd = body.password or DEFAULT_PASSWORD
+    pwd_hash = hash_password(pwd)
+
+    cursor = await db.execute(
+        """INSERT INTO users (name, email, password_hash, role, phone, hire_date)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (body.name.strip(), body.email.lower().strip(), pwd_hash, body.role,
+         body.phone or "", body.hire_date or ""),
+    )
+    new_id = cursor.lastrowid
+
+    # Auto-enroll in required tracks
+    if body.role == "colaborador":
+        from datetime import datetime, timedelta
+        cursor2 = await db.execute("SELECT id, due_in_days FROM tracks WHERE is_required=1 AND is_active=1")
+        tracks = await cursor2.fetchall()
+        for t in tracks:
+            due = (datetime.now() + timedelta(days=t["due_in_days"])).strftime("%Y-%m-%d")
+            await db.execute(
+                "INSERT OR IGNORE INTO enrollments (user_id, track_id, status, due_date) VALUES (?, ?, 'pendente', ?)",
+                (new_id, t["id"], due),
+            )
+        await db.execute("INSERT OR IGNORE INTO user_points (user_id) VALUES (?)", (new_id,))
+        await db.execute("INSERT OR IGNORE INTO streaks (user_id) VALUES (?)", (new_id,))
+
+    await db.commit()
+    return {"message": "Usuario criado com sucesso", "id": new_id, "email": body.email.lower().strip()}
 
 
 @router.get("")

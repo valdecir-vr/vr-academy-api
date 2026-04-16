@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS modules (
     is_required        INTEGER NOT NULL DEFAULT 1,
     estimated_minutes  INTEGER NOT NULL DEFAULT 30,
     crivo_area         TEXT,  -- area do crivo: abertura|qualificacao|apresentacao|objecoes|fechamento|postura
-    is_active          INTEGER NOT NULL DEFAULT 1
+    is_active          INTEGER NOT NULL DEFAULT 1,
+    prerequisite_module_id INTEGER REFERENCES modules(id)  -- modulo que precisa ser concluido antes
 );
 
 -- Licoes dentro de um modulo

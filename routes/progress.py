@@ -18,6 +18,7 @@ from services.gamification_service import (
     check_track_completion,
     update_streak,
 )
+from services.gate_service import is_module_unlocked, get_modules_lock_status
 
 router = APIRouter(prefix="/progress", tags=["progress"])
 
@@ -39,6 +40,14 @@ async def start_lesson(lesson_id: int, current_user: dict = Depends(get_current_
     lesson = await cursor.fetchone()
     if not lesson:
         raise HTTPException(status_code=404, detail="Licao nao encontrada")
+
+    # Gate check: verifica se o modulo esta desbloqueado
+    lock_status = await is_module_unlocked(current_user["id"], lesson["module_id"])
+    if not lock_status["unlocked"]:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Modulo bloqueado. {lock_status['reason']}",
+        )
 
     now = datetime.now(timezone.utc).isoformat()
 
@@ -88,6 +97,14 @@ async def complete_lesson(
     lesson = await cursor.fetchone()
     if not lesson:
         raise HTTPException(status_code=404, detail="Licao nao encontrada")
+
+    # Gate check: verifica se o modulo esta desbloqueado
+    lock_status = await is_module_unlocked(user_id, lesson["module_id"])
+    if not lock_status["unlocked"]:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Modulo bloqueado. {lock_status['reason']}",
+        )
 
     # Determina status
     score = body.score
@@ -320,6 +337,13 @@ async def identify_user(current_user: dict = Depends(get_current_user)):
         "email": current_user["email"],
         "role": current_user["role"],
     }
+
+
+@router.get("/modules/{module_id}/is_unlocked")
+async def check_module_unlocked(module_id: int, current_user: dict = Depends(get_current_user)):
+    """Verifica se um modulo especifico esta desbloqueado para o usuario."""
+    result = await is_module_unlocked(current_user["id"], module_id)
+    return result
 
 
 async def _get_user_progress(user_id: int) -> dict:

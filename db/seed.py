@@ -51,6 +51,8 @@ USERS = [
      "phone": "", "hire_date": "2024-01-01"},
     {"name": "Thays Sant'Ana", "email": "thays.santana@vradvogados.com.br", "role": "colaborador",
      "phone": "", "hire_date": "2024-01-01"},
+    {"name": "Pamella Franklin", "email": "pamella.franklin@vradvogados.com.br", "role": "colaborador",
+     "phone": "", "hire_date": "2026-04-16"},
 ]
 
 # ---------------------------------------------------------------------------
@@ -301,6 +303,7 @@ async def run_seed():
     track_id = cursor.lastrowid
 
     # Modulos e licoes
+    module_ids = []
     for mod in MODULES:
         lessons = mod.pop("lessons")
         cursor = await db.execute(
@@ -311,6 +314,7 @@ async def run_seed():
              mod["points_value"], mod["estimated_minutes"], mod["crivo_area"]),
         )
         module_id = cursor.lastrowid
+        module_ids.append(module_id)
 
         for les in lessons:
             await db.execute(
@@ -320,6 +324,13 @@ async def run_seed():
                 (module_id, les["name"], les["content_type"], les["duration_minutes"],
                  les["points_value"], les["order"], les["passing_score"]),
             )
+
+    # Set prerequisite chain: M2 needs M1, M3 needs M2, etc.
+    for i in range(1, len(module_ids)):
+        await db.execute(
+            "UPDATE modules SET prerequisite_module_id=? WHERE id=?",
+            (module_ids[i - 1], module_ids[i]),
+        )
 
     # Badges
     for b in BADGES:

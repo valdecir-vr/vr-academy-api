@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from db.database import get_db
 from auth_utils import get_current_user, require_admin, require_admin_or_gestor
+from services.gate_service import get_modules_lock_status
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -161,6 +162,27 @@ async def dashboard_gestor(current_user: dict = Depends(require_admin_or_gestor)
         sum(c.get("progress_pct") or 0 for c in colaboradores) / total if total else 0
     )
 
+    # Quiz details per colaborador per module (for gestor visibility)
+    quiz_details_by_user = {}
+    cursor = await db.execute(
+        """SELECT lp.user_id, m.id AS module_id, m.name AS module_name, m."order" AS module_order,
+                  l.name AS quiz_name, lp.score, lp.attempts, lp.time_spent_min, lp.status,
+                  lp.completed_at
+           FROM lesson_progress lp
+           JOIN lessons l ON l.id = lp.lesson_id
+           JOIN modules m ON m.id = l.module_id
+           WHERE l.content_type = 'quiz'
+             AND lp.user_id IN (SELECT id FROM users WHERE role='colaborador' AND is_active=1)
+           ORDER BY m."order", l."order" """,
+    )
+    for row in await cursor.fetchall():
+        r = dict(row)
+        uid = r.pop("user_id")
+        quiz_details_by_user.setdefault(uid, []).append(r)
+
+    for c in colaboradores:
+        c["quiz_details"] = quiz_details_by_user.get(c["id"], [])
+
     return {
         "metricas": {
             "total_sdrs": total,
@@ -261,15 +283,173 @@ async def dashboard_colaborador(current_user: dict = Depends(get_current_user)):
     rank_row = await cursor.fetchone()
     minha_posicao = rank_row[0] if rank_row else None
 
+    # Total colaboradores (for ranking context)
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM users WHERE role='colaborador' AND is_active=1"
+    )
+    total_users = (await cursor.fetchone())[0]
+
+    # Track data with modules and lock status
+    track_data = None
+    if enrollments:
+        track_id = enrollments[0]["track_id"]
+        cursor = await db.execute(
+            "SELECT id, name, description FROM tracks WHERE id=?", (track_id,)
+        )
+        track_row = await cursor.fetchone()
+        if track_row:
+            lock_map = await get_modules_lock_status(user_id, track_id)
+
+            cursor = await db.execute(
+                """SELECT m.id, m.name, m.description, m."order", m.estimated_minutes
+                   FROM modules m WHERE m.track_id=? AND m.is_active=1 ORDER BY m."order" """,
+                (track_id,),
+            )
+            mods = await cursor.fetchall()
+            modules_out = []
+            total_done = 0
+            for m in mods:
+                mod_lock = lock_map.get(m["id"], {"unlocked": True})
+                is_locked = not mod_lock["unlocked"]
+
+                # Lessons with progress
+                cursor = await db.execute(
+                    """SELECT l.id, l.name, l.content_type, l.duration_minutes,
+                              COALESCE(lp.status, 'nao_iniciada') AS status, lp.score
+                       FROM lessons l
+                       LEFT JOIN lesson_progress lp ON lp.lesson_id=l.id AND lp.user_id=?
+                       WHERE l.module_id=? ORDER BY l."order" """,
+                    (user_id, m["id"]),
+                )
+                lessons = await cursor.fetchall()
+                lessons_out = []
+                mod_completed = True
+                for l in lessons:
+                    completed = l["status"] == "concluida"
+                    if not completed:
+                        mod_completed = False
+                    lessons_out.append({
+                        "id": str(l["id"]),
+                        "title": l["name"],
+                        "durationMinutes": l["duration_minutes"],
+                        "isCompleted": completed,
+                        "type": {"video": "video", "quiz": "quiz", "texto": "reading",
+                                 "pdf": "reading", "audio": "exercise"}.get(l["content_type"], "reading"),
+                    })
+
+                if mod_completed and lessons_out:
+                    total_done += 1
+
+                modules_out.append({
+                    "id": str(m["id"]),
+                    "title": m["name"],
+                    "description": m["description"] or "",
+                    "durationMinutes": m["estimated_minutes"],
+                    "isCompleted": mod_completed and len(lessons_out) > 0,
+                    "isLocked": is_locked,
+                    "lockReason": mod_lock.get("reason"),
+                    "lessons": lessons_out,
+                })
+
+            progress_pct = enrollments[0].get("progress_pct") or 0
+            track_data = {
+                "id": str(track_row["id"]),
+                "name": track_row["name"],
+                "description": track_row["description"] or "",
+                "totalModules": len(modules_out),
+                "completedModules": total_done,
+                "progressPercent": round(progress_pct, 1),
+                "modules": modules_out,
+            }
+
+    # All badges (earned + locked)
+    cursor = await db.execute(
+        """SELECT b.id, b.name, b.description, b.category, b.points_value,
+                  ub.earned_at
+           FROM badges b
+           LEFT JOIN user_badges ub ON ub.badge_id = b.id AND ub.user_id = ?
+           WHERE b.is_secret = 0 OR ub.id IS NOT NULL
+           ORDER BY ub.earned_at DESC NULLS LAST, b.name""",
+        (user_id,),
+    )
+    all_badges = []
+    for b in await cursor.fetchall():
+        all_badges.append({
+            "id": str(b["id"]),
+            "name": b["name"],
+            "description": b["description"],
+            "iconEmoji": "🏆",
+            "status": "earned" if b["earned_at"] else "locked",
+            "earnedAt": b["earned_at"],
+            "category": {"streak": "streak", "modulo": "completion", "trilha": "completion",
+                         "performance": "performance", "especial": "special"}.get(b["category"], "special"),
+        })
+
+    # Top 5 ranking
+    cursor = await db.execute(
+        """SELECT u.id, u.name, up.total_points, s.current_streak,
+                  (SELECT COUNT(*) FROM user_badges WHERE user_id=u.id) AS badges_earned,
+                  e.progress_pct
+           FROM users u
+           LEFT JOIN user_points up ON up.user_id=u.id
+           LEFT JOIN streaks s ON s.user_id=u.id
+           LEFT JOIN enrollments e ON e.user_id=u.id
+           WHERE u.role='colaborador' AND u.is_active=1
+           ORDER BY up.total_points DESC LIMIT 5""",
+    )
+    top5 = []
+    for idx, r in enumerate(await cursor.fetchall(), 1):
+        top5.append({
+            "position": idx,
+            "userId": str(r["id"]),
+            "name": r["name"],
+            "points": r["total_points"] or 0,
+            "streak": r["current_streak"] or 0,
+            "badgesEarned": r["badges_earned"] or 0,
+            "progressPercent": round(r["progress_pct"] or 0, 1),
+            "isCurrentUser": r["id"] == user_id,
+        })
+
+    # Prescribed module
+    prescribed_mod_id = None
+    if prescricoes:
+        prescribed_mod_id = str(prescricoes[0].get("module_id", prescricoes[0].get("modulo", "")))
+        # Get the actual module_id from learning_prescriptions
+        cursor = await db.execute(
+            """SELECT module_id FROM learning_prescriptions
+               WHERE user_id=? AND status='pendente' ORDER BY priority, created_at DESC LIMIT 1""",
+            (user_id,),
+        )
+        presc_row = await cursor.fetchone()
+        if presc_row:
+            prescribed_mod_id = str(presc_row["module_id"])
+
+    # Level name
+    level = points.get("level", 1) if points else 1
+    level_names = {1: "SDR Iniciante", 2: "SDR Aprendiz", 3: "SDR Intermediario",
+                   4: "SDR Avancado", 5: "SDR Expert", 6: "SDR Elite"}
+    level_name = level_names.get(level, f"SDR Nivel {level}")
+
     return {
-        "pontos": points,
-        "streak": streak,
-        "rank_geral": minha_posicao,
-        "enrollments": enrollments,
-        "proximas_licoes": proximas,
-        "badges_recentes": badges_recentes,
-        "prescricoes_pendentes": prescricoes,
-        "lead_bloqueado": dict(bloqueio) if bloqueio else None,
+        "points": points.get("total_points", 0) if points else 0,
+        "level": level,
+        "levelName": level_name,
+        "streak": streak.get("current_streak", 0) if streak else 0,
+        "rankPosition": minha_posicao,
+        "totalUsers": total_users,
+        "track": track_data,
+        "badges": all_badges,
+        "top5Ranking": top5,
+        "studyCalendar": [],  # TODO: generate from access_log
+        "prescribedModuleId": prescribed_mod_id,
+        "_legacy": {
+            "pontos": points,
+            "streak": streak,
+            "enrollments": enrollments,
+            "proximas_licoes": proximas,
+            "prescricoes_pendentes": prescricoes,
+            "lead_bloqueado": dict(bloqueio) if bloqueio else None,
+        },
     }
 
 
