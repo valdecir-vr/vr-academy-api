@@ -11,7 +11,12 @@ from pydantic import BaseModel
 
 from db.database import get_db
 from auth_utils import get_current_user, require_admin_or_gestor, require_admin, hash_password
-from logging_config import logger, log_audit
+try:
+    from logging_config import logger, log_audit
+except ImportError:
+    import logging
+    logger = logging.getLogger("vr-academy")
+    async def log_audit(**kwargs): pass
 
 router = APIRouter(prefix="/users", tags=["users"])
 

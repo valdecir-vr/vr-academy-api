@@ -2,17 +2,13 @@
 
 import sys
 import os
-import time
-import traceback
-import json
 
 # Garante que server/ esta no Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from contextlib import asynccontextmanager
 import uvicorn
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -22,7 +18,6 @@ from db.database import init_db, close_db
 from db.seed import run_seed
 from services.alert_service import run_all_checks
 from services.gamification_service import update_weekly_ranking, update_monthly_points
-from logging_config import logger, log_error, log_request
 
 
 # ---------------------------------------------------------------------------
@@ -32,36 +27,12 @@ from logging_config import logger, log_error, log_request
 scheduler = AsyncIOScheduler(timezone="America/Sao_Paulo")
 
 
-async def _safe_job(fn, name: str):
-    """Wrapper que protege scheduler jobs com try-catch e logging."""
-    try:
-        logger.info(f"[SCHEDULER] Executando: {name}")
-        await fn()
-        logger.info(f"[SCHEDULER] Concluido: {name}")
-    except Exception as e:
-        logger.error(f"[SCHEDULER] FALHA em {name}: {e}")
-        await log_error(
-            source="scheduler",
-            message=f"Job '{name}' falhou: {str(e)}",
-            error_type=type(e).__name__,
-            stack_trace=traceback.format_exc(),
-        )
-
-
 def setup_scheduler():
-    """Configura jobs do scheduler com error handling."""
+    """Configura jobs do scheduler."""
 
-    async def _job_alerts():
-        await _safe_job(run_all_checks, "Verificacao de Alertas")
-
-    async def _job_ranking():
-        await _safe_job(update_weekly_ranking, "Ranking Semanal")
-
-    async def _job_monthly():
-        await _safe_job(update_monthly_points, "Reset Mensal de Pontos")
-
+    # Verificacao de alertas — a cada 4 horas
     scheduler.add_job(
-        _job_alerts,
+        run_all_checks,
         CronTrigger(hour="8,12,16,20", minute=0),
         id="alert_checks",
         name="Verificacao de Alertas",
@@ -69,16 +40,18 @@ def setup_scheduler():
         misfire_grace_time=300,
     )
 
+    # Ranking semanal — segunda-feira 07:00
     scheduler.add_job(
-        _job_ranking,
+        update_weekly_ranking,
         CronTrigger(day_of_week="mon", hour=7, minute=0),
         id="weekly_ranking",
         name="Ranking Semanal",
         replace_existing=True,
     )
 
+    # Zerar pontos mensais — dia 1, 06:00
     scheduler.add_job(
-        _job_monthly,
+        update_monthly_points,
         CronTrigger(day=1, hour=6, minute=0),
         id="monthly_points",
         name="Reset Mensal de Pontos",
@@ -86,7 +59,7 @@ def setup_scheduler():
     )
 
     scheduler.start()
-    logger.info(f"[SCHEDULER] {len(scheduler.get_jobs())} jobs configurados.")
+    print(f"[SCHEDULER] {len(scheduler.get_jobs())} jobs configurados.")
 
 
 # ---------------------------------------------------------------------------
@@ -96,11 +69,9 @@ def setup_scheduler():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup e shutdown do servidor."""
-    global _db_ready
-    logger.info("[VR Academy] Inicializando...")
+    print("[VR Academy] Inicializando...")
     await init_db()
     await run_seed()
-    _db_ready = True
     setup_scheduler()
     print(f"[VR Academy] Servidor pronto em {SERVER_HOST}:{SERVER_PORT}")
     yield
@@ -128,50 +99,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# ---------------------------------------------------------------------------
-# Middleware — Request logging (lightweight, no class)
-# ---------------------------------------------------------------------------
-
-_db_ready = False  # Set to True after init_db completes
-
-
-@app.middleware("http")
-async def request_logging_middleware(request: Request, call_next):
-    """Logs requests with timing. Never breaks the response."""
-    start = time.time()
-    try:
-        response = await call_next(request)
-    except Exception as exc:
-        duration = (time.time() - start) * 1000
-        logger.critical(f"UNHANDLED {request.method} {request.url.path}: {exc}")
-        if _db_ready:
-            try:
-                await log_error(
-                    source="middleware", message=str(exc), level="critical",
-                    endpoint=request.url.path, method=request.method,
-                    error_type=type(exc).__name__, stack_trace=traceback.format_exc(),
-                )
-            except Exception:
-                pass
-        return JSONResponse(status_code=500, content={"detail": "Erro interno do servidor."})
-
-    duration = (time.time() - start) * 1000
-    path = request.url.path
-
-    if _db_ready and not path.startswith("/health"):
-        try:
-            ip = request.client.host if request.client else None
-            await log_request(request.method, path, response.status_code, duration, None, ip, None)
-        except Exception:
-            pass
-
-    if response.status_code >= 500:
-        logger.error(f"{request.method} {path} -> {response.status_code} ({duration:.0f}ms)")
-
-    return response
-
 
 # ---------------------------------------------------------------------------
 # Rotas
@@ -215,7 +142,7 @@ async def health():
     return {
         "status": "ok" if db_ok else "degraded",
         "service": "vr-academy",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "db_ok": db_ok,
         "total_users": total_users,
         "scheduler_running": scheduler.running,
